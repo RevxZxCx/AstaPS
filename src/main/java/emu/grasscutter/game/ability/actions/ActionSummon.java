@@ -31,7 +31,7 @@ public class ActionSummon extends AbilityActionHandler {
             return false;
         }
 
-        var pos = resolveSummonPosition(target, action, summonPosRot.getPos());
+        var pos = resolveSummonPosition(ability, target, action, summonPosRot.getPos());
         var rot = new Position(summonPosRot.getRot());
         var monsterId = action.monsterID;
 
@@ -77,20 +77,35 @@ public class ActionSummon extends AbilityActionHandler {
      * the server never told it about, so it parses back as the world origin - thousands of units from
      * the caster, where the entity falls through the terrain and {@code die_y} culls it.
      *
+     * <p>A missing key has the same trap: the born block still means "read it from the global value",
+     * so the client vector is still the zero vector. Warn and fall back to the caster, which keeps the
+     * summon inside the fight and puts the miss in the log instead of silently burying it.
+     *
      * <p>Born types that are not keyed on a global position keep the client's value, which is
      * correct for them.
      */
-    private static Position resolveSummonPosition(
+    static Position resolveSummonPosition(
+            Ability ability,
             GameEntity caster,
             AbilityModifierAction action,
             emu.grasscutter.net.proto.VectorOuterClass.Vector clientPos) {
         var born = action.born;
         if (born != null && "ConfigBornByGlobalValue".equals(String.valueOf(born.get("$type")))) {
             Object key = born.get("positionKey");
-            if (key != null && caster != null) {
-                Position stored = caster.getGlobalAbilityPositions().get(String.valueOf(key));
-                if (stored != null) return new Position(stored);
-            }
+            Position stored =
+                    (key == null || caster == null)
+                            ? null
+                            : caster.getGlobalAbilityPositions().get(String.valueOf(key));
+            if (stored != null) return new Position(stored);
+
+            Grasscutter.getLogger()
+                    .warn(
+                            "[Summon] {} cannot resolve global position {}; spawning at the caster"
+                                    + " (caster={}) because the client vector here is always the origin",
+                            ability == null ? "<unknown ability>" : ability.getData().abilityName,
+                            key == null ? "<block has no positionKey>" : key,
+                            caster == null ? "null" : "#" + caster.getId());
+            return caster != null ? new Position(caster.getPosition()) : new Position(clientPos);
         }
         return new Position(clientPos);
     }

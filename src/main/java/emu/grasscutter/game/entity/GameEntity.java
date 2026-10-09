@@ -80,6 +80,13 @@ public abstract class GameEntity {
      */
     private final Map<String, Float> activeLimboModifiers = new ConcurrentHashMap<>();
 
+    /**
+     * Key for a Limbo hold we cannot name. No removal path can produce it, so an unrelated
+     * {@code ActionRemoveModifier} can never release it; {@code #} cannot appear in an ability or
+     * modifier name, so it cannot collide with a real entry either.
+     */
+    private static final String UNTRACKED_LIMBO_KEY = "#untracked";
+
     @Setter(AccessLevel.PROTECTED)
     @Getter
     private boolean isDead = false;
@@ -253,9 +260,22 @@ public abstract class GameEntity {
     public void trackLimboModifier(
             emu.grasscutter.game.ability.Ability ability, String modifierName, float hpThreshold) {
         if (ability == null || modifierName == null) return;
-        activeLimboModifiers.put(
-                ability.getData().abilityName + "|" + modifierName, hpThreshold);
-        setLimbo(recomputeLimboThreshold());
+        // Two abilities can pin the same named modifier; the most restrictive hold has to win,
+        // otherwise re-registering a 80% gate under a 30% one would loosen it mid-phase.
+        activeLimboModifiers.merge(
+                ability.getData().abilityName + "|" + modifierName, hpThreshold, Math::max);
+        refreshLimboGate();
+    }
+
+    /**
+     * Holds the gate for a Limbo modifier that arrived without an ability instance or a resolvable
+     * name, so nothing can ever report it gone. It lives in the same table under a key no removal can
+     * name, which keeps it alive exactly as long as it did before this bookkeeping existed - and
+     * keeps it from being mistaken for an entry that an unrelated removal may release.
+     */
+    private void holdUntrackedLimbo(float hpThreshold) {
+        activeLimboModifiers.merge(UNTRACKED_LIMBO_KEY, hpThreshold, Math::max);
+        refreshLimboGate();
     }
 
     /**
@@ -264,15 +284,28 @@ public abstract class GameEntity {
      * <p>The most restrictive threshold wins: while a modifier pinning HP at 80% is up, damage has
      * to stop there, so taking the maximum is what keeps the entity alive as long as any limbo
      * modifier remains.
+     *
+     * <p>Only a removal of a <em>registered</em> entry may change the gate. Callers such as
+     * {@link emu.grasscutter.game.ability.actions.ActionRemoveModifier} run for every modifier a
+     * skill retires, so an unrelated one must not find the table empty and open the gate - that
+     * would drop the boss's phase protection the moment it removed any other modifier.
      */
     public void onLimboModifierRemoved(
             emu.grasscutter.game.ability.Ability ability, String modifierName) {
         if (ability == null || modifierName == null) return;
-        activeLimboModifiers.remove(ability.getData().abilityName + "|" + modifierName);
-        if (activeLimboModifiers.isEmpty()) {
+        if (activeLimboModifiers.remove(ability.getData().abilityName + "|" + modifierName) == null) {
+            return;
+        }
+        refreshLimboGate();
+    }
+
+    /** Re-applies the gate from whatever is still holding it, or clears it when nothing is. */
+    private void refreshLimboGate() {
+        float max = recomputeLimboThreshold();
+        if (max <= 0f) {
             clearLimbo();
         } else {
-            setLimbo(recomputeLimboThreshold());
+            setLimbo(max);
         }
     }
 
@@ -333,8 +366,10 @@ public abstract class GameEntity {
             // No ability instance here to resolve a named special against, so an unresolvable
             // one reads as zero. Limbo modifiers without an explicit threshold (e.g. Hu Tao C6)
             // still need death-prevention, so fall back to a tiny floor.
+            // Held as untracked: nothing on this path can ever name the modifier, so nothing can
+            // report it gone, and an unrelated removal must not clear it either.
             Grasscutter.getLogger().debug("Limbo set to {}", limboThresholdOf(data));
-            this.setLimbo(limboThresholdOf(data));
+            this.holdUntrackedLimbo(limboThresholdOf(data));
         }
     }
 

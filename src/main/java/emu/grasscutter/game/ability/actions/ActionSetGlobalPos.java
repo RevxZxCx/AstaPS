@@ -41,7 +41,8 @@ public final class ActionSetGlobalPos extends AbilityActionHandler {
         }
 
         Position pos = new Position(target.getPosition());
-        applyOffset(pos, born.get("offset"), Boolean.TRUE.equals(born.get("onGround")));
+        String abilityName = ability == null ? "<unknown>" : ability.getData().abilityName;
+        applyOffset(pos, born.get("offset"), Boolean.TRUE.equals(born.get("onGround")), abilityName);
         target.getGlobalAbilityPositions().put(action.key, pos);
         Grasscutter.getLogger().debug("[SetGlobalPos] {} = {} (born {})", action.key, pos, type);
         return true;
@@ -50,25 +51,49 @@ public final class ActionSetGlobalPos extends AbilityActionHandler {
     /**
      * Shift the caster's position by the born block's offset.
      *
-     * <p>With {@code onGround} the vertical component is taken as lateral rather than as height. The
-     * Perpetual Mechanical Array's four split points differ only by the sign of {@code y}, so reading
-     * it as height collapsed them into two pairs stacked on the same ground point, and the two with a
-     * negative offset spawned inside the terrain - below the surface the server has no floor to catch
-     * them, so they fell until {@code die_y} culled them and the player saw half the split vanish.
-     * Read as lateral the four become the corners of a square around the caster, which is what the
-     * fight looks like, and the caster's own height is the ground the client snaps them to.
+     * <p><b>What is established.</b> Under {@code onGround} the offset's {@code y} is a <em>lateral</em>
+     * component, not height. That is not our guess from one boss, it is the shape of the data: in the
+     * 472 monster ability configs, 674 of the 1243 {@code onGround:true} born blocks that carry an
+     * offset spell it with {@code y}, and some of those are mirrored pairs around an identical
+     * {@code x}/{@code z} - the Pyro Abyss Mage alone has {@code {x:1, z:2, y:+3.464}} and
+     * {@code {x:1, z:2, y:-3.464}}. Read as height with {@code onGround} dropping it, every such pair
+     * collapses onto one point, which no designer authors; read as lateral they are two distinct ground
+     * positions. The Array's four split corners {@code {z:+/-7, y:+/-7}} are the same thing at four
+     * signs, and reading {@code y} as height there is what put two of the four minions under the
+     * terrain and culled them.
+     *
+     * <p><b>What is not.</b> Which horizontal axis the {@code y} folds into. The Array only tells us it
+     * is orthogonal to {@code z}, so we take the axis the block has not already used, which keeps the
+     * Array's corners a proper square. When both {@code x} and {@code z} are already present we cannot
+     * tell (a mirrored {@code y} could belong to either); we fold into {@code x} and log it, so a wrong
+     * placement on such a monster is at least traceable instead of looking like an arbitrary offset.
+     *
+     * <p>{@code alongGround} and {@code onGroundRaycastUpDist} are not modelled: the caster's own height
+     * is the ground the client snaps to.
      */
     @SuppressWarnings("unchecked")
-    private static void applyOffset(Position pos, Object offset, boolean onGround) {
+    static void applyOffset(Position pos, Object offset, boolean onGround, String abilityName) {
         if (!(offset instanceof Map)) return;
         Map<String, Object> off = (Map<String, Object>) offset;
-        float dy = asFloat(off.get("y"));
         pos.setX(pos.getX() + asFloat(off.get("x")));
         pos.setZ(pos.getZ() + asFloat(off.get("z")));
-        if (onGround) {
-            pos.setX(pos.getX() + dy);
-        } else {
+        float dy = asFloat(off.get("y"));
+        if (!onGround) {
             pos.setY(pos.getY() + dy);
+            return;
+        }
+        boolean xUsed = off.containsKey("x"), zUsed = off.containsKey("z");
+        if (xUsed && zUsed) {
+            Grasscutter.getLogger()
+                    .debug(
+                            "[SetGlobalPos] {} has onGround offset with x, y and z; folding y into x,"
+                                    + " which the data alone cannot justify",
+                            abilityName);
+        }
+        if (xUsed && !zUsed) {
+            pos.setZ(pos.getZ() + dy);
+        } else {
+            pos.setX(pos.getX() + dy);
         }
     }
 
