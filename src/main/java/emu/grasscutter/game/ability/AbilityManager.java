@@ -1195,8 +1195,13 @@ public final class AbilityManager extends BasePlayerManager {
                                     resolveModifierMapName(
                                             removed.getAbilityData(), modChange.getModifierLocalId());
                         }
-                        if (limboModName != null) {
-                            entity.onLimboModifierRemoved(removed.getAbility(), limboModName);
+                        // The client has stated that a Limbo modifier ended. When nothing is
+                        // registered under the name we could resolve, the hold can only have come
+                        // from the unnamed path, so release that one instead of leaving the entity
+                        // pinned for the rest of the fight.
+                        if (limboModName == null
+                                || !entity.releaseLimboModifier(removed.getAbility(), limboModName)) {
+                            entity.releaseUntrackedLimbo();
                         }
                     }
                 }

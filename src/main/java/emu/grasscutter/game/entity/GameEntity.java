@@ -292,10 +292,34 @@ public abstract class GameEntity {
      */
     public void onLimboModifierRemoved(
             emu.grasscutter.game.ability.Ability ability, String modifierName) {
-        if (ability == null || modifierName == null) return;
+        releaseLimboModifier(ability, modifierName);
+    }
+
+    /**
+     * Drops the hold registered under this ability + modifier name and recomputes the gate.
+     *
+     * @return true only when a registered entry was actually dropped, which is what tells a
+     *     caller that reported the end of a Limbo modifier apart from one that retired something else.
+     */
+    public boolean releaseLimboModifier(
+            emu.grasscutter.game.ability.Ability ability, String modifierName) {
+        if (ability == null || modifierName == null) return false;
         if (activeLimboModifiers.remove(ability.getData().abilityName + "|" + modifierName) == null) {
-            return;
+            return false;
         }
+        refreshLimboGate();
+        return true;
+    }
+
+    /**
+     * Releases a hold that was registered without a name.
+     *
+     * <p>Only sound after someone has stated that a Limbo modifier ended - the client reports the
+     * end of one, and no name matches, so it can only be the unnamed hold. A generic modifier
+     * removal must never call this.
+     */
+    public void releaseUntrackedLimbo() {
+        if (activeLimboModifiers.remove(UNTRACKED_LIMBO_KEY) == null) return;
         refreshLimboGate();
     }
 
@@ -322,7 +346,15 @@ public abstract class GameEntity {
      * is known (needed to resolve DynamicFloat ability specials).
      */
     public void onAddAbilityModifier(AbilityModifier data, emu.grasscutter.game.ability.Ability ability, String modifierName) {
-        onAddAbilityModifier(data);
+        // Registering by name below also means the unnamed hold must not be taken: doing both left a
+        // #untracked entry behind when the named one was released, and with the Array that entry holds
+        // the literal 0.30 ratio from FirstSplit_Normal, which pins the boss at 30% forever.
+        boolean tracksLimboByName =
+                ability != null
+                        && modifierName != null
+                        && data != null
+                        && data.state == AbilityModifier.State.Limbo;
+        onAddAbilityModifier(data, tracksLimboByName);
         if (ability != null && modifierName != null) {
             emu.grasscutter.game.ability.AbilityMaxHpRatioHelper.onModifierAdded(
                     ability, modifierName, data, this);
@@ -342,6 +374,11 @@ public abstract class GameEntity {
 }
 
     public void onAddAbilityModifier(AbilityModifier data) {
+        onAddAbilityModifier(data, false);
+    }
+
+    /** @param limboTrackedByName the caller will register the Limbo hold under a resolved name itself. */
+    private void onAddAbilityModifier(AbilityModifier data, boolean limboTrackedByName) {
         if (data == null) {
             return;
         }
@@ -362,7 +399,7 @@ public abstract class GameEntity {
         } catch (Throwable ignored) {
         }
 
-        if (data.state == AbilityModifier.State.Limbo) {
+        if (data.state == AbilityModifier.State.Limbo && !limboTrackedByName) {
             // No ability instance here to resolve a named special against, so an unresolvable
             // one reads as zero. Limbo modifiers without an explicit threshold (e.g. Hu Tao C6)
             // still need death-prevention, so fall back to a tiny floor.

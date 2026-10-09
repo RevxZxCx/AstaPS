@@ -116,6 +116,51 @@ final class LimboGateReleaseTest {
         assertEquals(0.60f, threshold(entity), 1e-6f);
     }
 
+    /**
+     * The whole gate has to be released by a named add followed by its named removal.
+     *
+     * <p>This is the case that regressed: the three-argument entry point delegates to the one
+     * argument version first, and that version also took a hold - under a key nothing can ever
+     * name - so removing the modifier the client reported as gone left the unnamed hold behind at
+     * the Array's literal 0.30, and the boss stayed unkillable after its marked minion died.
+     */
+    @Test
+    void aNamedAddRegistersExactlyOneHoldSoItsReleaseOpensTheGate() throws Exception {
+        var entity = new GateEntity();
+
+        entity.onAddAbilityModifier(
+                limboModifier(0.30f), ability("Monster_Apparatus_Perpetual"), "FirstSplit_Normal");
+
+        assertTrue(entity.isLimbo());
+        assertEquals(0.30f, threshold(entity), 1e-6f);
+
+        assertTrue(
+                entity.releaseLimboModifier(
+                        ability("Monster_Apparatus_Perpetual"), "FirstSplit_Normal"),
+                "the removal has to report that it actually dropped a hold");
+        assertFalse(entity.isLimbo(), "the boss must take damage again once the marked minion dies");
+    }
+
+    @Test
+    void anUnnamedHoldIsReleasedOnlyWhenALimboEndIsReported() throws Exception {
+        var entity = new GateEntity();
+        entity.onAddAbilityModifier(limboModifier(0.80f)); // no ability, no name available
+        assertTrue(entity.isLimbo());
+
+        entity.releaseUntrackedLimbo();
+
+        assertFalse(entity.isLimbo());
+    }
+
+    /** The Array ships these as plain constants, so the unnamed path reads the real ratio. */
+    private static emu.grasscutter.data.binout.AbilityModifier limboModifier(float ratio) {
+        var data = new emu.grasscutter.data.binout.AbilityModifier();
+        data.state = emu.grasscutter.data.binout.AbilityModifier.State.Limbo;
+        data.properties = new emu.grasscutter.data.binout.AbilityModifier.AbilityModifierProperty();
+        data.properties.Actor_HpThresholdRatio =
+                new emu.grasscutter.data.common.DynamicFloat(ratio);
+        return data;
+    }
     private static void track(GameEntity entity, String abilityName, String modifier, float ratio)
             throws Exception {
         entity.trackLimboModifier(ability(abilityName), modifier, ratio);
